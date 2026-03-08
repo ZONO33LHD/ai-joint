@@ -57,10 +57,24 @@ var launchCmd = &cobra.Command{
 
 		fmt.Printf("Launching session %q (id=%s) in %s\n", name, s.ID, dir)
 
+		// Open log file so the dashboard can read PTY output across processes.
+		logFile, err := os.OpenFile(session.OutputPath(s.ID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: open log file: %v\n", err)
+		}
+		defer func() {
+			if logFile != nil {
+				logFile.Close()
+			}
+		}()
+
 		p, err := apty.Spawn(ctx, ccBin, dir, launchEnv,
 			func(data []byte) {
 				mgr.AppendOutput(s.ID, data)
 				os.Stdout.Write(data)
+				if logFile != nil {
+					logFile.Write(data)
+				}
 			},
 			func() {
 				mgr.SetState(s.ID, session.StateDone)
@@ -69,6 +83,12 @@ var launchCmd = &cobra.Command{
 		)
 		if err != nil {
 			return fmt.Errorf("spawn pty: %w", err)
+		}
+
+		// Start Unix socket server so the dashboard can send input to this PTY.
+		sockPath := session.SocketPath(s.ID)
+		if err := p.StartInputServer(sockPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: input server: %v\n", err)
 		}
 
 		mgr.SetState(s.ID, session.StateIdle)

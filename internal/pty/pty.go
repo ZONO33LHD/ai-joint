@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"slices"
@@ -53,7 +54,7 @@ func (p *PTY) readLoop() {
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				// process ended unexpectedly; ignore OS-level EOF variants
+				// process ended unexpectedly
 			}
 			break
 		}
@@ -85,4 +86,30 @@ func (p *PTY) Kill() error {
 
 func (p *PTY) Wait() error {
 	return p.cmd.Wait()
+}
+
+// StartInputServer listens on a Unix domain socket at socketPath.
+// Any data received is forwarded verbatim to the PTY, allowing external
+// processes (e.g. the dashboard) to send keyboard input to this session.
+func (p *PTY) StartInputServer(socketPath string) error {
+	os.Remove(socketPath) // remove stale socket from previous run
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", socketPath, err)
+	}
+	go func() {
+		defer os.Remove(socketPath)
+		defer ln.Close()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(p, conn)
+			}()
+		}
+	}()
+	return nil
 }

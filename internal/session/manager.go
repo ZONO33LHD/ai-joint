@@ -2,7 +2,9 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"maps"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -136,6 +138,68 @@ func (m *Manager) AppendOutput(id string, data []byte) {
 		s.Output = s.Output[len(s.Output)-maxBuf:]
 	}
 	m.notifyChange()
+}
+
+// Reload re-reads all sessions from the store. Call this to pick up changes
+// made by external processes (e.g. hook subcommands).
+func (m *Manager) Reload() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rows, err := m.store.ListSessions()
+	if err != nil {
+		return err
+	}
+	next := make(map[string]*Session, len(rows))
+	for _, r := range rows {
+		var s *Session
+		if existing, ok := m.sessions[r.ID]; ok {
+			existing.Name = r.Name
+			existing.Dir = r.Dir
+			existing.State = State(r.State)
+			existing.UpdatedAt = r.UpdatedAt
+			s = existing
+		} else {
+			s = &Session{
+				ID:        r.ID,
+				Name:      r.Name,
+				Dir:       r.Dir,
+				State:     State(r.State),
+				CreatedAt: r.CreatedAt,
+				UpdatedAt: r.UpdatedAt,
+			}
+		}
+		// Sync output buffer from log file so the dashboard always has
+		// the latest PTY output even though it runs in a separate process.
+		if data, err := readLastN(OutputPath(r.ID), 64<<10); err == nil {
+			s.Output = data
+		}
+		next[r.ID] = s
+	}
+	m.sessions = next
+	return nil
+}
+
+// readLastN reads up to n bytes from the end of the file at path.
+func readLastN(path string, n int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	offset := fi.Size() - n
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(f)
 }
 
 func (m *Manager) Delete(id string) error {

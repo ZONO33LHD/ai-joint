@@ -39,10 +39,22 @@ Spin up isolated Claude Code sessions per project, watch their output side-by-si
 ```bash
 git clone https://github.com/shunsuke/ai-joint
 cd ai-joint
-go build -o aj .
+go build -o ~/.local/bin/aj .
+```
 
-# Optional: install to $GOPATH/bin
-go install .
+`~/.local/bin` is already on `$PATH` for most setups. Verify with:
+
+```bash
+aj --help
+```
+
+If `command not found`, add the directory to your `$PATH`:
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
+source ~/.zshrc   # or ~/.bashrc
 ```
 
 ## Usage
