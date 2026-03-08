@@ -5,6 +5,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/hinshun/vt10x"
+	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 )
 
@@ -135,17 +136,19 @@ func (tv *TermView) Draw(screen tcell.Screen) {
 		if vtRow >= tv.vtRows {
 			break
 		}
-		for col := 0; col < w; col++ {
-			vtCol := tv.colOffset + col
-			if vtCol >= tv.vtCols {
-				break
-			}
+		screenCol := 0
+		for vtCol := tv.colOffset; vtCol < tv.vtCols && screenCol < w; vtCol++ {
 			g := tv.vt.Cell(vtCol, vtRow)
 			ch := g.Char
 			if ch == 0 {
 				ch = ' '
 			}
-			screen.SetContent(x+col, y+row, ch, nil, glyphStyle(g))
+			screen.SetContent(x+screenCol, y+row, ch, nil, glyphStyle(g))
+			rw := runewidth.RuneWidth(ch)
+			if rw < 1 {
+				rw = 1
+			}
+			screenCol += rw
 		}
 	}
 

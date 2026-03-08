@@ -145,10 +145,25 @@ func serveInput(conn net.Conn, p *PTY, onResize func(cols, rows uint16)) {
 			if onResize != nil {
 				onResize(cols, rows)
 			}
+		} else if next == '[' || next == 'O' {
+			// CSI (ESC [) or SS3 (ESC O) sequence: buffer until the final byte
+			// (0x40–0x7E) to write the entire sequence atomically.
+			buf := []byte{0x1B, next}
+			for {
+				b2, err := r.ReadByte()
+				if err != nil {
+					p.Write(buf)
+					return
+				}
+				buf = append(buf, b2)
+				if b2 >= 0x40 && b2 <= 0x7E {
+					break
+				}
+			}
+			p.Write(buf)
 		} else {
-			// Regular escape sequence — put next back and forward ESC.
-			r.UnreadByte()
-			p.Write([]byte{0x1B})
+			// Single-char escape (e.g. bare ESC, Alt+key).
+			p.Write([]byte{0x1B, next})
 		}
 	}
 }

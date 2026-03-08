@@ -81,9 +81,10 @@ func (v *Viewport) Refresh(s *session.Session) {
 }
 
 // Connect opens a Unix socket to the session's PTY input server.
-func (v *Viewport) Connect() {
+// Returns true if the connection was established successfully.
+func (v *Viewport) Connect() bool {
 	if v.current == nil || v.current.State == session.StateDone {
-		return
+		return false
 	}
 	v.connMu.Lock()
 	defer v.connMu.Unlock()
@@ -94,10 +95,11 @@ func (v *Viewport) Connect() {
 	}
 	conn, err := net.Dial("unix", session.SocketPath(v.current.ID))
 	if err != nil {
-		slog.Debug("connect to session socket", "err", err)
-		return
+		slog.Warn("connect to session socket", "err", err)
+		return false
 	}
 	v.conn = conn
+	return true
 }
 
 func (v *Viewport) disconnect() {

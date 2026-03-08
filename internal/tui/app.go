@@ -124,9 +124,12 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 			return nil
 		case 'i':
 			if focusedOnViewport {
-				a.viewport.Connect()
-				a.inputMode = true
-				a.footer.SetText(footerInput)
+				if a.viewport.Connect() {
+					a.inputMode = true
+					a.footer.SetText(footerInput)
+				} else {
+					a.footer.SetText(" [red]Error: session not connected (is 'aj launch' running?)[-]")
+				}
 				return nil
 			}
 		case 'f':
@@ -166,7 +169,7 @@ func (a *App) Run() error {
 	a.refresh()
 
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := a.manager.Reload(); err != nil {
