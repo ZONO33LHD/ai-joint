@@ -12,8 +12,8 @@ import (
 
 const (
 	footerNav    = " [green]Tab[-]:Switch  [green]↑↓[-]:Navigate  [green]i[-]:Input mode  [green]q[-]:Quit"
-	footerBrowse = " [yellow]Tab[-]:Switch  [yellow]↑↓[-]:Scroll  [yellow]i[-]:Input mode  [yellow]q[-]:Quit"
-	footerInput  = " [red]INPUT MODE[-]  [red]Esc[-]:Exit  (all keystrokes → session)"
+	footerBrowse = " [yellow]Tab[-]:Switch  [yellow]↑↓/←→[-]:Scroll  [yellow]f[-]:Follow cursor  [yellow]i[-]:Input mode  [yellow]q[-]:Quit"
+	footerInput  = " [red]INPUT MODE[-]  [red]Esc[-]:Exit  (all keystrokes forwarded to session)"
 )
 
 type App struct {
@@ -57,7 +57,8 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 		AddItem(a.footer, 1, 0, false)
 
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		// Input mode: forward all keys to the PTY; Esc exits.
+		// ── Input mode ──────────────────────────────────────────────────────
+		// Forward ALL keys to the PTY. Esc exits input mode.
 		if a.inputMode {
 			if ev.Key() == tcell.KeyEscape {
 				a.inputMode = false
@@ -65,21 +66,56 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 				return nil
 			}
 			a.viewport.SendInput(ev)
-			return nil
+			return nil // consume — do NOT let tview process Ctrl+C etc.
 		}
 
-		// Navigation mode.
+		// ── Browse / navigation mode ─────────────────────────────────────────
+		focusedOnViewport := a.app.GetFocus() == a.viewport
+
 		switch ev.Key() {
 		case tcell.KeyTab:
-			if a.app.GetFocus() == a.sidebar.sessionList {
-				a.app.SetFocus(a.viewport)
-				a.footer.SetText(footerBrowse)
-			} else {
+			if focusedOnViewport {
 				a.viewport.disconnect()
+				a.viewport.FollowCursor()
 				a.app.SetFocus(a.sidebar.sessionList)
 				a.footer.SetText(footerNav)
+			} else {
+				a.app.SetFocus(a.viewport)
+				a.footer.SetText(footerBrowse)
 			}
 			return nil
+
+		// Arrow keys: scroll viewport when it has focus.
+		case tcell.KeyUp:
+			if focusedOnViewport {
+				a.viewport.Scroll(-1, 0)
+				return nil
+			}
+		case tcell.KeyDown:
+			if focusedOnViewport {
+				a.viewport.Scroll(1, 0)
+				return nil
+			}
+		case tcell.KeyLeft:
+			if focusedOnViewport {
+				a.viewport.Scroll(0, -4)
+				return nil
+			}
+		case tcell.KeyRight:
+			if focusedOnViewport {
+				a.viewport.Scroll(0, 4)
+				return nil
+			}
+		case tcell.KeyPgUp:
+			if focusedOnViewport {
+				a.viewport.Scroll(-10, 0)
+				return nil
+			}
+		case tcell.KeyPgDn:
+			if focusedOnViewport {
+				a.viewport.Scroll(10, 0)
+				return nil
+			}
 		}
 
 		switch ev.Rune() {
@@ -87,11 +123,15 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 			a.app.Stop()
 			return nil
 		case 'i':
-			// Enter input mode only when the viewport is focused.
-			if a.app.GetFocus() == a.viewport {
+			if focusedOnViewport {
 				a.viewport.Connect()
 				a.inputMode = true
 				a.footer.SetText(footerInput)
+				return nil
+			}
+		case 'f':
+			if focusedOnViewport {
+				a.viewport.FollowCursor()
 				return nil
 			}
 		}
@@ -125,8 +165,6 @@ func (a *App) refresh() {
 func (a *App) Run() error {
 	a.refresh()
 
-	// Poll the store every 2 seconds to pick up changes made by external
-	// processes (e.g. aj hook writing new activities).
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()

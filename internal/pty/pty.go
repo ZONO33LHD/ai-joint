@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -89,9 +90,10 @@ func (p *PTY) Wait() error {
 }
 
 // StartInputServer listens on a Unix domain socket at socketPath.
-// Any data received is forwarded verbatim to the PTY, allowing external
-// processes (e.g. the dashboard) to send keyboard input to this session.
-func (p *PTY) StartInputServer(socketPath string) error {
+// Data received is forwarded to the PTY; a special 6-byte sequence
+// (ESC NUL cols_hi cols_lo rows_hi rows_lo) triggers a PTY resize instead.
+// onResize, if non-nil, is called after each successful resize.
+func (p *PTY) StartInputServer(socketPath string, onResize func(cols, rows uint16)) error {
 	os.Remove(socketPath) // remove stale socket from previous run
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -105,11 +107,48 @@ func (p *PTY) StartInputServer(socketPath string) error {
 			if err != nil {
 				return
 			}
-			go func() {
-				defer conn.Close()
-				io.Copy(p, conn)
-			}()
+			go serveInput(conn, p, onResize)
 		}
 	}()
 	return nil
+}
+
+// serveInput forwards bytes from conn to the PTY, intercepting the 6-byte
+// resize command ESC NUL <cols_hi> <cols_lo> <rows_hi> <rows_lo>.
+func serveInput(conn net.Conn, p *PTY, onResize func(cols, rows uint16)) {
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	for {
+		b, err := r.ReadByte()
+		if err != nil {
+			return
+		}
+		if b != 0x1B {
+			p.Write([]byte{b})
+			continue
+		}
+		next, err := r.ReadByte()
+		if err != nil {
+			p.Write([]byte{0x1B})
+			return
+		}
+		if next == 0x00 {
+			// Resize command: read 4 bytes (cols BE + rows BE).
+			var dims [4]byte
+			if _, err := io.ReadFull(r, dims[:]); err != nil {
+				return
+			}
+			cols := uint16(dims[0])<<8 | uint16(dims[1])
+			rows := uint16(dims[2])<<8 | uint16(dims[3])
+			p.Resize(rows, cols)
+			if onResize != nil {
+				onResize(cols, rows)
+			}
+		} else {
+			// Regular escape sequence — put next back and forward ESC.
+			r.UnreadByte()
+			p.Write([]byte{0x1B})
+		}
+	}
 }

@@ -21,6 +21,7 @@ func Execute() {
 
 func init() {
 	rootCmd.AddCommand(launchCmd)
+	rootCmd.AddCommand(attachCmd)
 	rootCmd.AddCommand(dashboardCmd)
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(hookCmd)

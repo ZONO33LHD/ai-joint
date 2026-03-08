@@ -7,46 +7,69 @@ import (
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 	"github.com/shunsuke/ai-joint/internal/session"
 )
 
+// Viewport wraps TermView and adds session binding + socket-based input forwarding.
 type Viewport struct {
-	*tview.TextView
-	current *session.Session
-	conn    net.Conn
-	connMu  sync.Mutex
+	*TermView
+	current        *session.Session
+	conn           net.Conn
+	connMu         sync.Mutex
+	lastResizeCols int
+	lastResizeRows int
 }
 
 func NewViewport() *Viewport {
-	tv := tview.NewTextView()
+	tv := NewTermView()
 	tv.SetBorder(true)
 	tv.SetTitle(" (no session) ")
-	tv.SetDynamicColors(true)
-	tv.SetScrollable(true)
-	return &Viewport{TextView: tv}
+	v := &Viewport{TermView: tv}
+	tv.onDisplayResize = func(cols, rows int) {
+		v.sendResize(cols, rows)
+	}
+	return v
+}
+
+// sendResize sends a PTY resize command over the session's input socket.
+// It is a no-op if the size hasn't changed or there is no current session.
+func (v *Viewport) sendResize(cols, rows int) {
+	if v.current == nil {
+		return
+	}
+	if cols == v.lastResizeCols && rows == v.lastResizeRows {
+		return
+	}
+	v.lastResizeCols = cols
+	v.lastResizeRows = rows
+
+	socketPath := session.SocketPath(v.current.ID)
+	go func() {
+		conn, err := net.Dial("unix", socketPath)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Protocol: ESC NUL cols_hi cols_lo rows_hi rows_lo
+		packet := []byte{
+			0x1B, 0x00,
+			byte(cols >> 8), byte(cols),
+			byte(rows >> 8), byte(rows),
+		}
+		conn.Write(packet)
+	}()
 }
 
 func (v *Viewport) SetSession(s *session.Session) {
 	v.current = s
 	if s == nil {
 		v.SetTitle(" (no session) ")
-		v.Clear()
+		v.TermView.SetContent(nil, 0, 0)
 		v.disconnect()
 		return
 	}
 	v.SetTitle(fmt.Sprintf(" %s ", s.Name))
-	v.refresh()
-}
-
-func (v *Viewport) refresh() {
-	if v.current == nil {
-		return
-	}
-	v.Clear()
-	w := tview.ANSIWriter(v)
-	w.Write(v.current.Output)
-	v.ScrollToEnd()
+	v.TermView.SetContent(s.Output, s.Cols, s.Rows)
 }
 
 func (v *Viewport) Refresh(s *session.Session) {
@@ -54,11 +77,10 @@ func (v *Viewport) Refresh(s *session.Session) {
 		return
 	}
 	v.current = s
-	v.refresh()
+	v.TermView.SetContent(s.Output, s.Cols, s.Rows)
 }
 
-// Connect opens a Unix socket connection to the session's input server.
-// Safe to call even if the session is not running (error is silently ignored).
+// Connect opens a Unix socket to the session's PTY input server.
 func (v *Viewport) Connect() {
 	if v.current == nil || v.current.State == session.StateDone {
 		return
@@ -87,7 +109,7 @@ func (v *Viewport) disconnect() {
 	}
 }
 
-// SendInput forwards a key event to the connected PTY.
+// SendInput converts a tcell key event to bytes and writes to the PTY socket.
 func (v *Viewport) SendInput(ev *tcell.EventKey) {
 	data := keyEventToBytes(ev)
 	if len(data) == 0 {

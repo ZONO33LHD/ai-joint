@@ -5,9 +5,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	apty "github.com/shunsuke/ai-joint/internal/pty"
 	"github.com/shunsuke/ai-joint/internal/session"
 	"github.com/shunsuke/ai-joint/internal/store"
@@ -43,6 +47,16 @@ var launchCmd = &cobra.Command{
 			if dir, err = os.Getwd(); err != nil {
 				return fmt.Errorf("get working dir: %w", err)
 			}
+		}
+
+		// If a session with this name already exists, decide what to do.
+		if existing := mgr.GetByName(name); existing != nil {
+			if socketAlive(session.SocketPath(existing.ID)) {
+				return fmt.Errorf("session %q is already running — use: aj attach %s", name, name)
+			}
+			// Dead socket (process crashed / old binary) — clean up and relaunch.
+			fmt.Printf("session %q record exists but process is gone — reusing name\n", name)
+			mgr.Delete(existing.ID)
 		}
 
 		id, err := newID()
@@ -85,15 +99,44 @@ var launchCmd = &cobra.Command{
 			return fmt.Errorf("spawn pty: %w", err)
 		}
 
-		// Start Unix socket server so the dashboard can send input to this PTY.
-		sockPath := session.SocketPath(s.ID)
-		if err := p.StartInputServer(sockPath); err != nil {
+		// Set initial PTY size to match the current terminal window,
+		// and persist it so the dashboard can replay with the same dimensions.
+		if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			p.Resize(uint16(rows), uint16(cols))
+			session.WriteSize(s.ID, cols, rows)
+		}
+
+		// Put stdin in raw mode so every keystroke is sent immediately.
+		stdinFd := int(os.Stdin.Fd())
+		if oldState, err := term.MakeRaw(stdinFd); err == nil {
+			defer term.Restore(stdinFd, oldState)
+		}
+
+		// Track terminal resize signals and forward to the PTY.
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGWINCH)
+		go func() {
+			for range sigCh {
+				if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+					p.Resize(uint16(rows), uint16(cols))
+				}
+			}
+		}()
+		defer func() {
+			signal.Stop(sigCh)
+			close(sigCh)
+		}()
+
+		// Start Unix socket server so the dashboard can send input and resize commands.
+		if err := p.StartInputServer(session.SocketPath(s.ID), func(cols, rows uint16) {
+			session.WriteSize(s.ID, int(cols), int(rows))
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: input server: %v\n", err)
 		}
 
 		mgr.SetState(s.ID, session.StateIdle)
 
-		// Forward stdin to PTY; exits when the PTY closes or stdin reaches EOF.
+		// Forward stdin to the PTY.
 		go func() {
 			io.Copy(p, os.Stdin)
 		}()
@@ -114,4 +157,14 @@ func newID() (string, error) {
 		return "", fmt.Errorf("generate id: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// socketAlive returns true if something is actively listening on the Unix socket.
+func socketAlive(path string) bool {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

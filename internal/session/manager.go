@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"slices"
@@ -132,11 +131,6 @@ func (m *Manager) AppendOutput(id string, data []byte) {
 		return
 	}
 	s.Output = append(s.Output, data...)
-	// Keep last 64 KiB to bound memory usage.
-	const maxBuf = 64 << 10
-	if len(s.Output) > maxBuf {
-		s.Output = s.Output[len(s.Output)-maxBuf:]
-	}
 	m.notifyChange()
 }
 
@@ -169,9 +163,10 @@ func (m *Manager) Reload() error {
 				UpdatedAt: r.UpdatedAt,
 			}
 		}
-		// Sync output buffer from log file so the dashboard always has
-		// the latest PTY output even though it runs in a separate process.
-		if data, err := readLastN(OutputPath(r.ID), 64<<10); err == nil {
+		// Sync terminal dimensions and output buffer from files so the dashboard
+		// can replay PTY output with the exact same size Claude Code used.
+		s.Cols, s.Rows = ReadSize(r.ID)
+		if data, err := os.ReadFile(OutputPath(r.ID)); err == nil {
 			s.Output = data
 		}
 		next[r.ID] = s
@@ -180,27 +175,6 @@ func (m *Manager) Reload() error {
 	return nil
 }
 
-// readLastN reads up to n bytes from the end of the file at path.
-func readLastN(path string, n int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	offset := fi.Size() - n
-	if offset < 0 {
-		offset = 0
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return io.ReadAll(f)
-}
 
 func (m *Manager) Delete(id string) error {
 	m.mu.Lock()
