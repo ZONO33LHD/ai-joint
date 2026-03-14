@@ -4,9 +4,9 @@ import (
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/hinshun/vt10x"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
+	"github.com/shunsuke/ai-joint/internal/vt10x"
 )
 
 // attrXxx mirrors the unexported constants in vt10x/state.go.
@@ -139,6 +139,12 @@ func (tv *TermView) Draw(screen tcell.Screen) {
 		screenCol := 0
 		for vtCol := tv.colOffset; vtCol < tv.vtCols && screenCol < w; vtCol++ {
 			g := tv.vt.Cell(vtCol, vtRow)
+
+			// Skip wide-character placeholder cells.
+			if g.IsWideDummy() {
+				continue
+			}
+
 			ch := g.Char
 			if ch == 0 {
 				ch = ' '
