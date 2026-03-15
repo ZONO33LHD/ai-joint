@@ -111,6 +111,22 @@ func (v *Viewport) disconnect() {
 	}
 }
 
+// SendRawInput writes raw text bytes directly to the PTY socket.
+func (v *Viewport) SendRawInput(text string) {
+	if len(text) == 0 {
+		return
+	}
+	v.connMu.Lock()
+	defer v.connMu.Unlock()
+	if v.conn != nil {
+		if _, err := v.conn.Write([]byte(text)); err != nil {
+			slog.Warn("SendRawInput write failed", "err", err)
+		}
+	} else {
+		slog.Warn("SendRawInput: no connection")
+	}
+}
+
 // SendInput converts a tcell key event to bytes and writes to the PTY socket.
 func (v *Viewport) SendInput(ev *tcell.EventKey) {
 	data := keyEventToBytes(ev)
@@ -179,6 +195,8 @@ func keyEventToBytes(ev *tcell.EventKey) []byte {
 		return []byte{'\x10'}
 	case tcell.KeyCtrlU:
 		return []byte{'\x15'}
+	case tcell.KeyCtrlV:
+		return []byte{'\x16'}
 	case tcell.KeyCtrlW:
 		return []byte{'\x17'}
 	case tcell.KeyCtrlZ:

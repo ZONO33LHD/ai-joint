@@ -2,6 +2,7 @@ package tui
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -24,6 +25,28 @@ type App struct {
 	manager   *session.Manager
 	store     *store.Store
 	inputMode bool
+}
+
+// pasteRoot wraps a tview.Flex to add a PasteHandler that forwards pasted
+// text to the PTY when the dashboard is in input mode.
+type pasteRoot struct {
+	*tview.Flex
+	onPaste func(text string)
+}
+
+// HasFocus always returns true so that tview's event loop calls PasteHandler
+// on the root. The embedded Flex.HasFocus() does not reliably propagate focus
+// from deeply nested children, which caused paste events to be silently dropped.
+func (r *pasteRoot) HasFocus() bool {
+	return true
+}
+
+func (r *pasteRoot) PasteHandler() func(string, func(p tview.Primitive)) {
+	return func(text string, setFocus func(p tview.Primitive)) {
+		if r.onPaste != nil {
+			r.onPaste(text)
+		}
+	}
 }
 
 func NewApp(mgr *session.Manager, st *store.Store) *App {
@@ -51,10 +74,20 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 		SetTextAlign(tview.AlignCenter).
 		SetText("── ai-joint ──")
 
-	root := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(title, 1, 0, false).
-		AddItem(mainFlex, 0, 1, true).
-		AddItem(a.footer, 1, 0, false)
+	root := &pasteRoot{
+		Flex: tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(title, 1, 0, false).
+			AddItem(mainFlex, 0, 1, true).
+			AddItem(a.footer, 1, 0, false),
+		onPaste: func(text string) {
+			if a.inputMode {
+				// Normalize line endings for PTY.
+				text = strings.ReplaceAll(text, "\r\n", "\r")
+				text = strings.ReplaceAll(text, "\n", "\r")
+				a.viewport.SendRawInput(text)
+			}
+		},
+	}
 
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		// ── Input mode ──────────────────────────────────────────────────────
@@ -141,6 +174,7 @@ func NewApp(mgr *session.Manager, st *store.Store) *App {
 		return ev
 	})
 
+	a.app.EnablePaste(true)
 	a.app.SetRoot(root, true)
 
 	mgr.SetOnChange(func() {
