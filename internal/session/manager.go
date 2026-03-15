@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"slices"
 	"sync"
@@ -166,8 +167,22 @@ func (m *Manager) Reload() error {
 		// Sync terminal dimensions and output buffer from files so the dashboard
 		// can replay PTY output with the exact same size Claude Code used.
 		s.Cols, s.Rows = ReadSize(r.ID)
-		if data, err := os.ReadFile(OutputPath(r.ID)); err == nil {
+		outPath := OutputPath(r.ID)
+		if data, err := os.ReadFile(outPath); err == nil {
 			s.Output = data
+		}
+
+		// Infer state from socket liveness and output activity.
+		if s.State != StateDone {
+			sockPath := SocketPath(r.ID)
+			if !socketAlive(sockPath) {
+				// Process is gone — mark as done.
+				s.State = StateDone
+			} else if info, err := os.Stat(outPath); err == nil && time.Since(info.ModTime()) < 3*time.Second {
+				s.State = StateBusy
+			} else {
+				s.State = StateIdle
+			}
 		}
 		next[r.ID] = s
 	}
@@ -189,6 +204,16 @@ func (m *Manager) Delete(id string) error {
 	delete(m.sessions, id)
 	m.notifyChange()
 	return nil
+}
+
+// socketAlive returns true if something is actively listening on the Unix socket.
+func socketAlive(path string) bool {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // notifyChange fires the onChange callback asynchronously so callers holding
