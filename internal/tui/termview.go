@@ -128,6 +128,13 @@ func (tv *TermView) Draw(screen tcell.Screen) {
 	tv.mu.Lock()
 	defer tv.mu.Unlock()
 
+	// On the first draw (or any draw where follow is on), snap to cursor now
+	// that widget dimensions are known. SetContent's snapToCursor is a no-op
+	// before the first draw because GetInnerRect returns zero.
+	if tv.follow {
+		tv.snapToCursor()
+	}
+
 	tv.vt.Lock()
 	defer tv.vt.Unlock()
 
