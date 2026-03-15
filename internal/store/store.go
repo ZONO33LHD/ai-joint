@@ -25,11 +25,12 @@ type SessionRow struct {
 }
 
 type ActivityRow struct {
-	ID         int64
-	SessionID  string
-	Kind       string
-	Value      string
-	OccurredAt time.Time
+	ID          int64
+	SessionID   string
+	SessionName string
+	Kind        string
+	Value       string
+	OccurredAt  time.Time
 }
 
 func New() (*Store, error) {
@@ -41,6 +42,10 @@ func New() (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
+	}
+	// WAL mode allows concurrent reads while another process writes.
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -151,8 +156,11 @@ func (s *Store) InsertActivity(row ActivityRow) error {
 }
 
 func (s *Store) ListActivities(limit int) ([]ActivityRow, error) {
-	rows, err := s.db.Query(
-		`SELECT id, session_id, kind, value, occurred_at FROM activities ORDER BY occurred_at DESC LIMIT ?`,
+	rows, err := s.db.Query(`
+		SELECT a.id, a.session_id, COALESCE(s.name, ''), a.kind, a.value, a.occurred_at
+		FROM activities a
+		LEFT JOIN sessions s ON s.id = a.session_id
+		ORDER BY a.occurred_at DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -166,7 +174,7 @@ func (s *Store) ListActivities(limit int) ([]ActivityRow, error) {
 			r          ActivityRow
 			occurredAt int64
 		)
-		if err := rows.Scan(&r.ID, &r.SessionID, &r.Kind, &r.Value, &occurredAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.SessionName, &r.Kind, &r.Value, &occurredAt); err != nil {
 			return nil, err
 		}
 		r.OccurredAt = time.Unix(occurredAt, 0)

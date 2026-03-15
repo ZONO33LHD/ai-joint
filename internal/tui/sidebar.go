@@ -77,8 +77,15 @@ func (sb *Sidebar) Refresh(sessions []*session.Session) {
 	}
 	sb.activityView.Clear()
 	for _, a := range activities {
-		fmt.Fprintf(sb.activityView, "[yellow]%-5s[-] %-10s %s\n",
-			a.Kind, a.Value, a.OccurredAt.Format("15:04"))
+		name := a.SessionName
+		if name == "" {
+			name = a.SessionID
+			if len(name) > 8 {
+				name = name[:8]
+			}
+		}
+		fmt.Fprintf(sb.activityView, "[green]%s[-] [yellow]%s[-] %s %s\n",
+			name, a.Kind, a.Value, a.OccurredAt.Format("15:04"))
 	}
 }
 

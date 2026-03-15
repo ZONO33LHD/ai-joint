@@ -35,6 +35,17 @@ func (t *Tracker) Process(data []byte) error {
 
 	now := time.Now()
 
+	if ev.ToolName != "" {
+		if err := t.store.InsertActivity(store.ActivityRow{
+			SessionID:  ev.SessionID,
+			Kind:       "tool",
+			Value:      ev.ToolName,
+			OccurredAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+
 	if ev.CustomCommand != "" {
 		if err := t.store.InsertActivity(store.ActivityRow{
 			SessionID:  ev.SessionID,

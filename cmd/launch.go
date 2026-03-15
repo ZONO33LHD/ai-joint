@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"github.com/shunsuke/ai-joint/internal/hooks"
 	apty "github.com/shunsuke/ai-joint/internal/pty"
 	"github.com/shunsuke/ai-joint/internal/session"
 	"github.com/shunsuke/ai-joint/internal/store"
@@ -30,6 +31,11 @@ var launchCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		name := args[0]
+
+		// Ensure Claude Code hooks are configured before launching.
+		if err := hooks.EnsureHooks(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: configure hooks: %v\n", err)
+		}
 
 		st, err := store.New()
 		if err != nil {
